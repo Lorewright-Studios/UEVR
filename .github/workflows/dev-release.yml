@@ -1,5 +1,8 @@
 name: Dev Release
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: ['**']   # not tags: the release step creates a tag and would otherwise trigger a second build
+  workflow_dispatch:
 permissions:
   contents: read
 env:
