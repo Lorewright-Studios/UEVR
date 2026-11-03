@@ -1,3 +1,9 @@
+> **Lorewright Studios branch `bl4-menu-fullsource`** — joeyhodge's fork plus one option, `VR_2DScreenFullSource`
+> ("2D Screen: Full Image In Both Eyes", Advanced): in 2D Screen mode the whole render goes to both eyes and each eye is
+> sized at half the window width, so fullscreen menus that draw across the stereo buffer (Borderlands 4's ECHO menu) show
+> whole and at normal proportions. Used by the [Borderlands 4 VR profile](https://github.com/Lorewright-Studios/Borderlands4-VR).
+> Builds are published under this repo's Releases as `uevr.zip`.
+
 # UEVR ![build](https://github.com/praydog/UEVR/actions/workflows/dev-release.yml/badge.svg)
 
 Universal Unreal Engine VR Mod (4/5)
