@@ -8828,6 +8828,7 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
         }
 
         m_2d_screen_mode->draw("2D Screen Mode");
+        m_2d_screen_full_source->draw("2D Screen: Full Image In Both Eyes");
 
         ImGui::TextWrapped("Render Resolution (per-eye): %d x %d", get_runtime()->get_width(), get_runtime()->get_height());
         ImGui::TextWrapped("Total Render Resolution: %d x %d", get_runtime()->get_width() * 2, get_runtime()->get_height());

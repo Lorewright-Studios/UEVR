@@ -3691,8 +3691,11 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
             }
 
             const auto use_shf_flat_screen_source = is_shf_current_game();
+            // User-selectable: hand the entire (both-eye) render to each eye's screen. Menus that draw once
+            // across the whole double-wide target (Borderlands 4 ECHO menu) otherwise split between the eyes.
+            const auto full_source_2d_screen = vr->is_2d_screen_full_source_enabled();
             const auto use_mono_flat_screen_source =
-                use_shf_flat_screen_source || mixtape_auto_2d_screen || halo_electra_renderer_2d_screen;
+                use_shf_flat_screen_source || mixtape_auto_2d_screen || halo_electra_renderer_2d_screen || full_source_2d_screen;
             auto* screen_source_tex = &view_game_tex;
 
             if (use_shf_flat_screen_source &&
@@ -3713,7 +3716,8 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
                 left_source_rect = RECT{0, 0, source_width, source_height};
 
                 // Mono movies need the full source copied to both eyes; stereo/manual 2D keeps a single-eye crop.
-                if (!mixtape_auto_2d_screen &&
+                if (!full_source_2d_screen &&
+                    !mixtape_auto_2d_screen &&
                     shf_scene_mode != ShfSceneMode::Mono2D &&
                     view_desc.Width >= (uint64_t)view_desc.Height * 2 &&
                     view_desc.Width >= 2) {
@@ -3777,7 +3781,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
                 SPDLOG_INFO_EVERY_N_SEC(
                     2,
                     "[D3D12] 2D screen using matched mono source game={} mode={} auto={} tex=[{}x{} fmt={}] src=[{},{} -> {},{}] dst=[{},{} -> {},{}]",
-                    halo_electra_renderer_2d_screen ? "Halo" : (mixtape_auto_2d_screen ? "Mixtape" : "SHf"),
+                    halo_electra_renderer_2d_screen ? "Halo" : (mixtape_auto_2d_screen ? "Mixtape" : (full_source_2d_screen ? "FullSource" : "SHf")),
                     shf_scene_mode_name(m_shf_scene_mode),
                     shf_auto_2d_screen || mixtape_auto_2d_screen || halo_electra_renderer_2d_screen,
                     view_desc.Width,

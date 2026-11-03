@@ -831,6 +831,13 @@ public:
         return m_2d_screen_mode->value();
     }
 
+    // 2D screen shows the whole (both-eye) render in each eye instead of one half per eye.
+    // For games whose fullscreen menus draw once across the entire double-wide stereo target
+    // (Borderlands 4's ECHO menu), this keeps the menu complete in both eyes.
+    bool is_2d_screen_full_source_enabled() const {
+        return m_2d_screen_mode->value() && m_2d_screen_full_source->value();
+    }
+
     bool is_mixtape_auto_2d_active() const {
         return m_mixtape_auto_2d_active.load(std::memory_order_relaxed);
     }
@@ -1454,6 +1461,7 @@ private:
     const ModToggle::Ptr m_decoupled_pitch_ui_adjust{ ModToggle::create(generate_name("DecoupledPitchUIAdjust"), true) };
     const ModToggle::Ptr m_load_blueprint_code{ ModToggle::create(generate_name("LoadBlueprintCode"), false, true) };
     const ModToggle::Ptr m_2d_screen_mode{ ModToggle::create(generate_name("2DScreenMode"), false) };
+    const ModToggle::Ptr m_2d_screen_full_source{ ModToggle::create(generate_name("2DScreenFullSource"), false, true) };
     const ModToggle::Ptr m_roomscale_movement{ ModToggle::create(generate_name("RoomscaleMovement"), false) };
     const ModToggle::Ptr m_roomscale_sweep{ ModToggle::create(generate_name("RoomscaleMovementSweep"), true) };
     const ModToggle::Ptr m_swap_controllers{ ModToggle::create(generate_name("SwapControllerInputs"), false) };
@@ -1806,6 +1814,7 @@ public:
             *m_decoupled_pitch_ui_adjust,
             *m_load_blueprint_code,
             *m_2d_screen_mode,
+            *m_2d_screen_full_source,
             *m_roomscale_movement,
             *m_roomscale_sweep,
             *m_swap_controllers,
