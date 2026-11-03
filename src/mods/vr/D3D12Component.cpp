@@ -5752,8 +5752,7 @@ bool D3D12Component::setup() {
 
     if (!vr->is_extreme_compatibility_mode_enabled() &&
         !real_backbuffer_bootstrap &&
-        !stalker2_single_eye_synced_source &&
-        !vr->is_2d_screen_full_source_enabled()) // mono 2D screen: the target is already one eye wide
+        !stalker2_single_eye_synced_source)
     {
         backbuffer_desc.Width /= 2; // The texture we get from UE is both eyes combined. we will copy the regions later.
     }

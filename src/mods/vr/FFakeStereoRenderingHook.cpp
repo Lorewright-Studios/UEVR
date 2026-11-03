@@ -30533,15 +30533,6 @@ void FFakeStereoRenderingHook::adjust_view_rect(FFakeStereoRendering* stereo, in
         return;
     }
 
-    if (VR::get()->is_2d_screen_full_source_enabled()) {
-        // Mono 2D screen: one view spanning the whole (single-width) target, no per-eye half.
-        *x = 0;
-        *y = 0;
-        *w = VR::get()->get_hmd_width();
-        *h = VR::get()->get_hmd_height();
-        return;
-    }
-
     if (VR::get()->is_stereo_emulation_enabled()) {
         *w *= 2;
     } else {
@@ -30847,24 +30838,18 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
         const auto head_offset_flat = quat_converter * (vqi_norm * (pos_flat * world_scale));
         const auto eye_separation = quat_converter * (glm::normalize(new_rotation) * (eye_offset * world_scale));
 
-        const auto mono_2d_screen = is_2d_screen && vr->is_2d_screen_full_source_enabled();
-
         if (!has_double_precision) {
             if (!is_2d_screen) {
                 *view_location -= head_offset;
             }
 
-            if (!mono_2d_screen) {
-                *view_location -= eye_separation;
-            }
+            *view_location -= eye_separation;
         } else {
             if (!is_2d_screen) {
                 *view_d -= head_offset;
             }
 
-            if (!mono_2d_screen) {
-                *view_d -= eye_separation;
-            }
+            *view_d -= eye_separation;
         }
 
         if (!is_2d_screen) {
@@ -31430,11 +31415,6 @@ uint32_t FFakeStereoRenderingHook::get_desired_number_of_views_hook(FFakeStereoR
     }
 
     update_sifu_native_mesh_command_mode(is_stereo_enabled, vr->is_using_native_stereo());
-
-    if (is_stereo_enabled && vr->is_2d_screen_full_source_enabled()) {
-        // Mono 2D screen: a single view that the 2D screen hands to both eyes.
-        return 1;
-    }
 
     if (!is_stereo_enabled || (vr->is_using_afr() && !vr->is_splitscreen_compatibility_enabled())) {
         constexpr uint32_t BOOTSTRAP_PULSE_ENGINE_FRAMES = 2;
@@ -39106,8 +39086,7 @@ void VRRenderTargetManager_Base::calculate_render_target_size(const sdk::FViewpo
         this->request_dedicated_ui_target(x, y);
     }
 
-    // Mono 2D screen renders a single full-width view, so the target is one eye wide.
-    x = VR::get()->get_hmd_width() * (VR::get()->is_2d_screen_full_source_enabled() ? 1 : 2);
+    x = VR::get()->get_hmd_width() * 2;
     y = VR::get()->get_hmd_height();
 
     SPDLOG_DEBUG("RenderTargetSize After: {}x{}", x, y);
