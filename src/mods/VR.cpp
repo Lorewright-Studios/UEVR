@@ -8680,11 +8680,15 @@ void VR::on_post_present() {
 
 uint32_t VR::get_hmd_width() const {
     if (m_2d_screen_mode->value()) {
+        // Full-source 2D screen: the whole double-wide target is shown in each eye, so size each eye at half the
+        // window width. The combined target then has the window's aspect and fullscreen menus lay out normally.
+        const auto full_source_divisor = m_2d_screen_full_source->value() ? 2u : 1u;
+
         if (get_runtime()->is_openxr()) {
-            return g_framework->get_rt_size().x * m_openxr->resolution_scale->value();
+            return std::max<uint32_t>((uint32_t)(g_framework->get_rt_size().x * m_openxr->resolution_scale->value()) / full_source_divisor, 64);
         }
 
-        return g_framework->get_rt_size().x;
+        return std::max<uint32_t>((uint32_t)g_framework->get_rt_size().x / full_source_divisor, 64);
     }
 
     if (m_extreme_compat_mode->value()) {
