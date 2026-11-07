@@ -1794,6 +1794,102 @@ bool avowed_is_current_game() {
     return result;
 }
 
+bool borderlands4_is_current_game() {
+    static const bool result = []() {
+        const auto exe_path = utility::get_module_pathw(utility::get_executable());
+        return exe_path && uevr::games::is_borderlands4_executable_path(*exe_path);
+    }();
+
+    return result;
+}
+
+// Borderlands 4 adds a foreground projection matrix (used by bGbxForeground
+// primitives: first-person arms and weapon) to FSceneViewInitOptions right
+// after the stock projection data. The game fills it in its mono projection
+// path; when a stereo device supplies the projection that path is skipped and
+// the matrix stays identity, which throws every foreground vertex out of clip
+// space. Measured on the 5.5.4 build: projection at +0xA0, foreground
+// projection at +0x1E0, both FMatrix (double).
+namespace borderlands4_foreground_projection {
+constexpr uintptr_t PROJECTION_OFFSET = 0xA0;
+constexpr uintptr_t FOREGROUND_PROJECTION_OFFSET = 0x1E0;
+constexpr size_t MATRIX_SIZE = sizeof(double) * 16;
+
+bool is_identity(const double* m) {
+    for (size_t i = 0; i < 16; ++i) {
+        if (m[i] != ((i % 5) == 0 ? 1.0 : 0.0)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool is_perspective(const double* m) {
+    for (size_t i = 0; i < 16; ++i) {
+        if (!std::isfinite(m[i])) {
+            return false;
+        }
+    }
+
+    return m[11] == 1.0 && m[15] == 0.0 && m[0] > 0.0 && m[5] > 0.0;
+}
+
+void apply(sdk::FSceneViewInitOptions* init_options) {
+    if (init_options == nullptr ||
+        !is_readable_process_range(reinterpret_cast<uintptr_t>(init_options), FOREGROUND_PROJECTION_OFFSET + MATRIX_SIZE))
+    {
+        return;
+    }
+
+    auto* const bytes = reinterpret_cast<uint8_t*>(init_options);
+    double projection[16]{};
+    double foreground[16]{};
+    std::memcpy(projection, bytes + PROJECTION_OFFSET, MATRIX_SIZE);
+    std::memcpy(foreground, bytes + FOREGROUND_PROJECTION_OFFSET, MATRIX_SIZE);
+
+    if (!is_identity(foreground) || !is_perspective(projection)) {
+        return;
+    }
+
+    std::memcpy(bytes + FOREGROUND_PROJECTION_OFFSET, projection, MATRIX_SIZE);
+    SPDLOG_INFO_ONCE("[Borderlands4][ForegroundProjection] Filled identity foreground projection from the stereo "
+        "projection (m00={:.6f} m11={:.6f} m20={:.6f} m21={:.6f})",
+        projection[0], projection[5], projection[8], projection[9]);
+}
+} // namespace borderlands4_foreground_projection
+
+// Borderlands 4 builds scene views (inventory 3D item preview and others) whose init options do not hold a view
+// family where the resolved layout expects one: crash dumps 2026-10-30 showed 0x20, 0x1 and a heap address 0x40
+// bytes before an unmapped page. sceneview_constructor_impl dereferences it; such views must reach the game's
+// constructor untouched.
+namespace borderlands4_view_family {
+bool is_readable(uintptr_t address, size_t size) {
+    for (auto cursor = address; cursor < address + size;) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<const void*>(cursor), &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT ||
+            (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) {
+            return false;
+        }
+
+        cursor = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    }
+
+    return true;
+}
+
+// Address range + readable memory only. A Views TArray sanity test (num 0..16 <= max) was tried too (43a9f943) and
+// rejected the REAL view families on BL4 (the layout's views offset does not hold the array there): those views then
+// skipped UEVR's processing and the foreground fix, so the VR hands / gun (foreground layer) vanished (2026-10-30).
+// Both crash cases are covered without it: 0x20 / 0x1 by the range, the heap pointer by the readable check.
+bool is_plausible(const sdk::FSceneViewFamily* family) {
+    constexpr size_t MIN_READABLE = 0x100; // covers the views / render target / scene offsets the layout accepts
+
+    const auto address = reinterpret_cast<uintptr_t>(family);
+    return address >= 0x10000 && address < 0x800000000000ull && (address & 7) == 0 && is_readable(address, MIN_READABLE);
+}
+} // namespace borderlands4_view_family
+
 bool dune_awakening_is_current_game() {
     static const bool result = []() {
         const auto exe_path = utility::get_module_pathw(utility::get_executable());
@@ -2368,6 +2464,44 @@ bool dune_is_auxiliary_view_family(sdk::FSceneViewFamily* view_family, const cha
         SPDLOG_WARNING_EVERY_N_SEC(
             2,
             "[Dune][Showroom] Failed to classify view family at {}; preserving normal UEVR behavior",
+            source != nullptr ? source : "<unknown>");
+        return false;
+    }
+}
+
+// Borderlands 4 draws the map (OakMapViewer) and the inventory/character previews (GbxStandInViewer) through
+// GbxSceneViewerSceneCaptureComponent families in their own transient worlds, rendered during
+// UGameViewportClient::Draw. Treated as the main viewport they re-run UEVR's per-frame pose/frame bookkeeping and
+// stereo view processing several times a frame ("vtable is already hooked" spam), which flickers the VR view
+// behind menus and breaks the map capture. Their render target is never the main viewport (the family layout's
+// render target offset is resolved by matching that pointer), so the target identifies them.
+bool borderlands4_is_auxiliary_view_family(sdk::FSceneViewFamily* view_family, const char* source) {
+    if (!borderlands4_is_current_game() || view_family == nullptr || g_hook == nullptr) {
+        return false;
+    }
+
+    try {
+        auto* rtm = g_hook->get_render_target_manager();
+        auto* main_viewport = rtm != nullptr ? rtm->get_viewport() : nullptr;
+        auto* family_target = view_family->get_render_target();
+
+        if (main_viewport == nullptr || family_target == nullptr ||
+            reinterpret_cast<void*>(family_target) == reinterpret_cast<void*>(main_viewport))
+        {
+            return false;
+        }
+
+        SPDLOG_INFO_EVERY_N_SEC(
+            2,
+            "[Borderlands4] Isolating auxiliary SceneCapture view family at {} target={:x} main_viewport={:x}",
+            source != nullptr ? source : "<unknown>",
+            reinterpret_cast<uintptr_t>(family_target),
+            reinterpret_cast<uintptr_t>(main_viewport));
+        return true;
+    } catch (...) {
+        SPDLOG_WARNING_EVERY_N_SEC(
+            2,
+            "[Borderlands4] Failed to classify view family at {}; preserving normal UEVR behavior",
             source != nullptr ? source : "<unknown>");
         return false;
     }
@@ -16604,7 +16738,9 @@ void FFakeStereoRenderingHook::attempt_hook_fsceneview_constructor() {
 
     auto& vr = VR::get();
 
-    if (!vr->is_ghosting_fix_enabled() && !vr->is_splitscreen_compatibility_enabled() && !vr->is_sceneview_compatibility_enabled() && !vr->is_native_stereo_fix_enabled()) {
+    // Borderlands 4 always hooks the constructor for the foreground projection fix.
+    if (!borderlands4_is_current_game() &&
+        !vr->is_ghosting_fix_enabled() && !vr->is_splitscreen_compatibility_enabled() && !vr->is_sceneview_compatibility_enabled() && !vr->is_native_stereo_fix_enabled()) {
         return;
     }
 
@@ -23225,6 +23361,24 @@ bool FFakeStereoRenderingHook::refresh_ghosting_fix_owner(GhostingFixPair& pair,
 
 // FSceneView constructor hook
 sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor(sdk::FSceneView* view, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4) {
+    if (borderlands4_is_current_game()) {
+        // Views whose init options hold no real ViewFamily where the layout expects one (see
+        // borderlands4_view_family) go straight to the game's constructor, without UEVR's stereo processing or
+        // the foreground fix. A null family keeps the normal path (impl handles it).
+        const auto family_ptr = init_options != nullptr ? init_options->get_view_family() : nullptr;
+        const auto family = reinterpret_cast<uintptr_t>(family_ptr);
+        if (family != 0 && !borderlands4_view_family::is_plausible(family_ptr)) {
+            SPDLOG_INFO_ONCE("[Borderlands4] Passing a scene view with an invalid ViewFamily ({:x}) to the game constructor", family);
+            return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);
+        }
+
+        borderlands4_foreground_projection::apply(init_options);
+    }
+
+    return sceneview_constructor_impl(view, init_options, a3, a4);
+}
+
+sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor_impl(sdk::FSceneView* view, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4) {
     SPDLOG_INFO_ONCE("Called FSceneView constructor for the first time");
 
     auto& vr = VR::get();
@@ -23433,6 +23587,14 @@ sdk::FSceneView* FFakeStereoRenderingHook::sceneview_constructor(sdk::FSceneView
             if (dimension_shift_is_auxiliary_view_family(view_family, "FSceneView constructor")) {
                 return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);
             }
+        }
+    }
+
+    if (borderlands4_is_current_game()) {
+        update_init_offsets();
+
+        if (borderlands4_is_auxiliary_view_family(init_options->get_view_family(), "FSceneView constructor")) {
+            return g_hook->m_sceneview_data.constructor_hook.unsafe_call<sdk::FSceneView*>(view, init_options, a3, a4);
         }
     }
 
@@ -27493,7 +27655,8 @@ void FFakeStereoRenderingHook::begin_render_viewfamily(ISceneViewExtension* exte
     }
 
     if (dune_is_auxiliary_view_family(&view_family, "BeginRenderViewFamily") ||
-        dimension_shift_is_auxiliary_view_family(&view_family, "BeginRenderViewFamily"))
+        dimension_shift_is_auxiliary_view_family(&view_family, "BeginRenderViewFamily") ||
+        borderlands4_is_auxiliary_view_family(&view_family, "BeginRenderViewFamily"))
     {
         return;
     }
@@ -28452,7 +28615,8 @@ void FFakeStereoRenderingHook::pre_render_viewfamily_renderthread(ISceneViewExte
     }
 
     if (dune_is_auxiliary_view_family(&view_family, "PreRenderViewFamily_RenderThread") ||
-        dimension_shift_is_auxiliary_view_family(&view_family, "PreRenderViewFamily_RenderThread"))
+        dimension_shift_is_auxiliary_view_family(&view_family, "PreRenderViewFamily_RenderThread") ||
+        borderlands4_is_auxiliary_view_family(&view_family, "PreRenderViewFamily_RenderThread"))
     {
         return;
     }

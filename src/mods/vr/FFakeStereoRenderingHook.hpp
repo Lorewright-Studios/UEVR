@@ -1246,6 +1246,7 @@ private:
 
     // FSceneView
     static sdk::FSceneView* sceneview_constructor(sdk::FSceneView* sceneview, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4);
+    static sdk::FSceneView* sceneview_constructor_impl(sdk::FSceneView* sceneview, sdk::FSceneViewInitOptions* init_options, void* a3, void* a4);
 
     // Naruto's UE4.16 build omits the stock stereo sizing branch in
     // FSceneViewport::InitDynamicRHI. This hook changes only its allocation locals.
