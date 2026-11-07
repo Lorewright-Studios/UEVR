@@ -714,6 +714,10 @@ public:
         return m_enable_hitch_diagnostics->value();
     }
 
+    bool is_perf_cache_pre57_ui_probe_enabled() const {
+        return m_perf_cache_pre57_ui_probe->value();
+    }
+
     bool is_ahud_compatibility_enabled() const {
         if (uevr::nascar::is_target()) { return false; }
         return m_compatibility_ahud->value();
@@ -1456,6 +1460,7 @@ private:
     const ModToggle::Ptr m_enable_gui{ ModToggle::create(generate_name("EnableGUI"), true) };
     const ModToggle::Ptr m_enable_depth{ ModToggle::create(generate_name("PassDepthToRuntime"), false, true) };
     const ModToggle::Ptr m_enable_hitch_diagnostics{ ModToggle::create(generate_name("EnableHitchDiagnostics"), false, true) };
+    const ModToggle::Ptr m_perf_cache_pre57_ui_probe{ ModToggle::create(generate_name("PerfCachePre57UIProbe"), false, true) };
     const ModToggle::Ptr m_ktjl_openxr_factory_repair{ ModToggle::create(generate_name("KTJLOpenXRFactoryRepair"), false, true) };
     const ModToggle::Ptr m_decoupled_pitch{ ModToggle::create(generate_name("DecoupledPitch"), false) };
     const ModToggle::Ptr m_decoupled_pitch_ui_adjust{ ModToggle::create(generate_name("DecoupledPitchUIAdjust"), true) };
@@ -1809,6 +1814,7 @@ public:
             *m_enable_gui,
             *m_enable_depth,
             *m_enable_hitch_diagnostics,
+            *m_perf_cache_pre57_ui_probe,
             *m_ktjl_openxr_factory_repair,
             *m_decoupled_pitch,
             *m_decoupled_pitch_ui_adjust,

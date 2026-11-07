@@ -2250,6 +2250,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
     // a getter from a raw UI wrapper midway through a resize or target change.
     ComPtr<ID3D12Resource> pre57_ui_native;
     const bool pre57_ui_handled = ffsr->get_render_target_manager()->try_get_pre57_slate_ui_native(ui_target, pre57_ui_native);
+    on_frame_cp.mark("ui_target+pre57_probe");
     const auto native_ui_resource = [&]() -> ID3D12Resource* {
         if (sdk::galactic_racer::current_game() && g_framework->is_dx12()) {
             return swgr_ui_snapshot && swgr_ui_snapshot->device_identity == reinterpret_cast<uintptr_t>(device)
@@ -2303,6 +2304,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
     if (!stalker_exact && stalker_requested) { m_stalker2_pair_cache.invalidate(); m_stalker2_established_epoch = 0; }
+    on_frame_cp.mark("stalker_sync");
     auto native_stereo_packet = ffsr != nullptr
         ? stalker_exact ? ffsr->get_stalker2_native_packet(stalker_frame, &native_frame_ticket)
             : ffsr->get_native_stereo_frame_packet_for_submit(frame_count, frame_diag::Backend::d3d12, &native_frame_ticket)
@@ -2314,6 +2316,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         native_stereo_packet = ffsr->get_native_stereo_frame_packet_for_submit(
             frame_count, frame_diag::Backend::d3d12, &native_frame_ticket);
     }
+    on_frame_cp.mark("native_packet_get");
     auto* const native_stereo_hook = ffsr.get();
     const auto record_native_submit = [&](frame_diag::Runtime api, frame_diag::Stage stage,
         int32_t result = 0, uint8_t eye = 2, uint8_t call = 0) {
@@ -2367,6 +2370,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
 
+    on_frame_cp.mark("pbz_native_check");
     const auto real_backbuffer_copy_needs_setup = [&]() {
         if (backbuffer.Get() != real_backbuffer.Get() ||
             m_game_tex.texture.Get() == nullptr ||
@@ -2384,6 +2388,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
             game_desc.Height != real_desc.Height;
     }();
 
+    on_frame_cp.mark("copy_setup_check");
     if (real_backbuffer_copy_needs_setup) {
         spdlog::info("[VR] Setting up game texture as copy of backbuffer");
 
@@ -2438,6 +2443,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
                 commands.setup(L"Game Texture Commands");
             }
         }
+        on_frame_cp.mark("gt_branch_setup");
     } else if (backbuffer.Get() != real_backbuffer.Get() &&
                (is_sw_zero_company_ue56_external_backbuffer || is_swgr_scene_conversion)) {
         const auto source_desc = backbuffer->GetDesc();
@@ -2664,6 +2670,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         m_skip_spectator_view_for_volatile_external_rt = false;
         backbuffer = m_game_tex.texture;
         scene_source_state = ENGINE_SRC_COLOR;
+        on_frame_cp.mark("gt_branch_swzc_swgr");
     } else if (backbuffer.Get() != real_backbuffer.Get() && (use_stable_external_backbuffer_copy || m_game_tex.texture.Get() != backbuffer.Get() || !texture_context_has_views(m_game_tex))) {
         log_shf_texture_source_observation(backbuffer.Get(), real_backbuffer.Get(), m_game_tex.texture.Get(), frame_count);
 
@@ -2865,9 +2872,10 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
                 m_game_tex.reset();
             }
         }
+        on_frame_cp.mark("gt_branch_external");
     }
 
-    on_frame_cp.mark("ui_lookup+native_packet");
+    on_frame_cp.mark("game_tex_branch_tail");
     bool scene_capture_packet_ready = false;
     const auto retire_native_scene_capture = [&]() {
         if (stalker_requested) { m_stalker2_pair_cache.invalidate(); m_stalker2_established_epoch = 0; }

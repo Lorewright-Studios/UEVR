@@ -541,6 +541,19 @@ protected:
     std::unique_ptr<FTexture2DRHIRef> owned_dedicated_ui_target{};
     std::mutex everspace2_dedicated_ui_lifetime_mutex{};
     std::vector<FRHITexture2D*> everspace2_retained_dedicated_ui_targets{};
+    // Optional per-frame probe cache for try_get_pre57_slate_ui_native (VR_PerfCachePre57UIProbe).
+    // Reused while the UI, dedicated and scene targets and the UI extent are unchanged; re-probed every 120 uses.
+    struct Pre57UiProbeCache {
+        FRHITexture2D* texture{nullptr};
+        FRHITexture2D* dedicated{nullptr};
+        FRHITexture2D* scene{nullptr};
+        uint32_t width{0};
+        uint32_t height{0};
+        uint32_t uses{0};
+        bool valid{false};
+        Microsoft::WRL::ComPtr<ID3D12Resource> native{};
+    } m_pre57_ui_probe_cache{};
+
     uint32_t dedicated_ui_width{0};
     uint32_t dedicated_ui_height{0};
     std::chrono::steady_clock::time_point dedicated_ui_last_attempt{};

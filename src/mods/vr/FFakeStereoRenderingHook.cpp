@@ -41588,17 +41588,46 @@ bool VRRenderTargetManager_Base::try_get_pre57_slate_ui_native(
         !supports_ue55_dedicated_ui_target_for_current_game()) {
         return false;
     }
+    auto& cache = m_pre57_ui_probe_cache;
+    const auto dedicated = get_dedicated_ui_target();
+    const auto scene_rt = get_render_target();
+    const auto vr = VR::get();
+    const bool use_cache = vr != nullptr && vr->is_perf_cache_pre57_ui_probe_enabled();
+
+    if (use_cache && cache.valid && cache.uses < 120 &&
+        cache.texture == texture && cache.dedicated == dedicated && cache.scene == scene_rt &&
+        cache.width == dedicated_ui_width && cache.height == dedicated_ui_height)
+    {
+        ++cache.uses;
+        native = cache.native; // may be null: a cached rejection is still handled
+        return true;
+    }
+
     ID3D12Resource* resource{};
     ID3D12Resource* scene{};
     D3D12_RESOURCE_DESC desc{};
-    if (texture && texture == get_dedicated_ui_target() && texture != get_render_target() &&
+    if (texture && texture == dedicated && texture != scene_rt &&
         ue55_dx12_try_get_native_resource_direct(texture, "retained pre-5.7 Slate UI", &resource, &desc, true) &&
         uevr::pre57_slate::supported_color(desc) &&
         desc.Width == dedicated_ui_width && desc.Height == dedicated_ui_height &&
-        ue55_dx12_try_get_native_resource_direct(get_render_target(), "retained pre-5.7 Slate scene", &scene, nullptr, true) &&
+        ue55_dx12_try_get_native_resource_direct(scene_rt, "retained pre-5.7 Slate scene", &scene, nullptr, true) &&
         scene && scene != resource) {
         native = resource;
     }
+
+    if (use_cache) {
+        cache.texture = texture;
+        cache.dedicated = dedicated;
+        cache.scene = scene_rt;
+        cache.width = dedicated_ui_width;
+        cache.height = dedicated_ui_height;
+        cache.uses = 0;
+        cache.native = native;
+        cache.valid = true;
+    } else if (cache.valid) {
+        cache = {};
+    }
+
     // Handled, including rejection: presentation must not fall back to the
     // process-global getter's historical virtual-slot probing.
     return true;
