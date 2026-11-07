@@ -1460,7 +1460,7 @@ private:
     const ModToggle::Ptr m_enable_gui{ ModToggle::create(generate_name("EnableGUI"), true) };
     const ModToggle::Ptr m_enable_depth{ ModToggle::create(generate_name("PassDepthToRuntime"), false, true) };
     const ModToggle::Ptr m_enable_hitch_diagnostics{ ModToggle::create(generate_name("EnableHitchDiagnostics"), false, true) };
-    const ModToggle::Ptr m_perf_cache_pre57_ui_probe{ ModToggle::create(generate_name("PerfCachePre57UIProbe"), false, true) };
+    const ModToggle::Ptr m_perf_cache_pre57_ui_probe{ ModToggle::create(generate_name("PerfCachePre57UIProbe"), true, true) };
     const ModToggle::Ptr m_ktjl_openxr_factory_repair{ ModToggle::create(generate_name("KTJLOpenXRFactoryRepair"), false, true) };
     const ModToggle::Ptr m_decoupled_pitch{ ModToggle::create(generate_name("DecoupledPitch"), false) };
     const ModToggle::Ptr m_decoupled_pitch_ui_adjust{ ModToggle::create(generate_name("DecoupledPitchUIAdjust"), true) };

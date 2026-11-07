@@ -41367,6 +41367,9 @@ bool VRRenderTargetManager_Base::observe_nascar_scene_target(uintptr_t viewport)
 }
 
 void VRRenderTargetManager_Base::destroy_dedicated_ui_target() {
+    if (get_dedicated_ui_target() != nullptr) {
+        m_pre57_ui_probe_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
     std::unique_lock<std::mutex> swgr_lifetime{swgr_ui_lifetime_mutex, std::defer_lock};
     if (swgr_ue574_dx12_runtime()) { swgr_lifetime.lock(); }
     swgr_ui_snapshot.store(nullptr, std::memory_order_release);
@@ -41593,8 +41596,9 @@ bool VRRenderTargetManager_Base::try_get_pre57_slate_ui_native(
     const auto scene_rt = get_render_target();
     const auto vr = VR::get();
     const bool use_cache = vr != nullptr && vr->is_perf_cache_pre57_ui_probe_enabled();
+    const auto generation = m_pre57_ui_probe_generation.load(std::memory_order_acquire);
 
-    if (use_cache && cache.valid && cache.uses < 120 &&
+    if (use_cache && cache.valid && cache.uses < 1800 && cache.generation == generation &&
         cache.texture == texture && cache.dedicated == dedicated && cache.scene == scene_rt &&
         cache.width == dedicated_ui_width && cache.height == dedicated_ui_height)
     {
@@ -41621,6 +41625,7 @@ bool VRRenderTargetManager_Base::try_get_pre57_slate_ui_native(
         cache.scene = scene_rt;
         cache.width = dedicated_ui_width;
         cache.height = dedicated_ui_height;
+        cache.generation = generation;
         cache.uses = 0;
         cache.native = native;
         cache.valid = true;
@@ -41799,6 +41804,10 @@ void VRRenderTargetManager_Base::set_dedicated_ui_target(FRHITexture2D* rt, uint
 }
 
 void VRRenderTargetManager_Base::set_dedicated_ui_target_unlocked(FRHITexture2D* rt, uint32_t width, uint32_t height) {
+    // Some paths republish the same target every frame; only a real change invalidates the UI probe cache.
+    if (rt != get_dedicated_ui_target() || width != dedicated_ui_width || height != dedicated_ui_height) {
+        m_pre57_ui_probe_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
     std::unique_lock<std::mutex> swgr_lifetime{swgr_ui_lifetime_mutex, std::defer_lock};
     if (swgr_ue574_dx12_runtime()) { swgr_lifetime.lock(); }
     std::shared_ptr<GalacticRacerSceneSnapshot> swgr_ui;
