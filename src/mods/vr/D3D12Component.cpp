@@ -6,6 +6,7 @@
 #include <utility/String.hpp>
 #include <utility/ScopeGuard.hpp>
 #include <utility/Logging.hpp>
+#include <utility/PerfSections.hpp>
 #include <algorithm>
 #include <array>
 #include <DirectXMath.h>
@@ -1842,8 +1843,16 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
     const auto on_frame_start = collect_frame_timing
         ? std::chrono::steady_clock::now()
         : std::chrono::steady_clock::time_point{};
+    // Hitch diagnostics: split on_frame into top-level sections ("[Perf][d3d12 on_frame sections]").
+    // Declared before the guard so it is still alive when the guard runs on every return path.
+    static utility::perf::Sections<24> s_on_frame_sections{};
+    utility::perf::Checkpoints<24> on_frame_cp{s_on_frame_sections, collect_frame_timing};
+
     utility::ScopeGuard frame_timing_guard{[&]() {
         if (collect_frame_timing) {
+            on_frame_cp.mark("tail_or_early_return");
+            s_on_frame_sections.count_frame();
+            s_on_frame_sections.log_if_due("d3d12 on_frame sections");
             m_perf_on_frame.add(std::chrono::steady_clock::now() - on_frame_start);
             log_frame_timing_stats_if_needed(vr);
         }
@@ -1959,6 +1968,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         return vr::VRCompositorError_None;
     }
 
+    on_frame_cp.mark("acquire_backbuffer");
     const auto is_shf_external_backbuffer =
         is_shf_current_game() &&
         g_framework->is_dx12() &&
@@ -2209,6 +2219,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
 
     // Sometimes this can happen if pipeline execution does not go exactly as planned
     // so we need to resynchronized or begin the frame again.
+    on_frame_cp.mark("flags+game_specific_setup");
     if (runtime->ready()) {
         if (runtime->is_openxr()) {
             // Keep xrWaitFrame ownership where it already is, but do not let the D3D12
@@ -2224,6 +2235,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
 
+    on_frame_cp.mark("runtime_ready_sync");
     const auto& ffsr = VR::get()->m_fake_stereo_hook;
     const auto swgr_ui_snapshot = sdk::galactic_racer::current_game() && g_framework->is_dx12()
         ? ffsr->get_render_target_manager()->get_swgr_ui_snapshot() : nullptr;
@@ -2855,6 +2867,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
 
+    on_frame_cp.mark("ui_lookup+native_packet");
     bool scene_capture_packet_ready = false;
     const auto retire_native_scene_capture = [&]() {
         if (stalker_requested) { m_stalker2_pair_cache.invalidate(); m_stalker2_established_epoch = 0; }
@@ -3005,6 +3018,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         native_stereo_packet.reset();
     }
 
+    on_frame_cp.mark("native_scene_capture");
     const auto nascar25_native_copy_states = uevr::nascar::title25::native_copy_source_states(
         uevr::nascar::is_title25(), uevr::nascar::title25::is_validated_build(), g_framework->is_dx12(),
         native_stereo_packet != nullptr && vr->is_nascar_native_stereo_fix_requested(),
@@ -3197,6 +3211,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         } else { m_stalker2_pair_cache.invalidate(); }
     };
 
+    on_frame_cp.mark("pre_copy_setup");
     // For copying the real backbuffer if we need to
     if (m_game_tex.texture.Get() != nullptr && backbuffer == real_backbuffer) {
         const auto idx = swapchain->GetCurrentBackBufferIndex() % m_game_tex_commands.size();
@@ -3296,6 +3311,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         log_shf_scene_mode_if_needed(shf_scene_mode, source_desc, real_desc, frame_count, shf_using_mono_expansion);
     }
 
+    on_frame_cp.mark("game_tex_copy");
     bool ue58_ui_uses_shader_conversion = false;
     bool ue58_ui_copy_blocked = false;
     bool ue58_ui_reuse_last_converted_frame = false;
@@ -3589,6 +3605,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
 
+    on_frame_cp.mark("ui_copy");
     // nullptr means "use m_game_ui_tex" to the spectator helper. Use an empty
     // override on rejection so neither it nor alpha/clear passes reuse a stale
     // source that may now alias the scene. Keep old GPU references, do not reset.
@@ -3923,6 +3940,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     };
 
+    on_frame_cp.mark("2d_screen_prep");
     // Draws the spectator view
     auto clear_rt = [&](d3d12::CommandContext& commands) {
         if (ue58_ui_uses_shader_conversion) {
@@ -4185,6 +4203,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
             (uint32_t)spectator_desc.Format);
     }
 
+    on_frame_cp.mark("scene_submit+spectator");
     ComPtr<ID3D12Resource> scene_depth_tex{};
 
     if (vr->is_depth_enabled() && runtime->is_depth_allowed()) {
@@ -4237,6 +4256,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         scene_depth_tex.Reset();
     }
 
+    on_frame_cp.mark("depth");
     // If m_frame_count is even, we're rendering the left eye.
     if (is_left_eye_frame) {
         m_submitted_left_eye = true;
@@ -4611,6 +4631,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }
     }
 
+    on_frame_cp.mark("left_eye_submit");
     if (is_right_eye_frame) {
         if ((runtime->ready() && vr->get_synchronize_stage() == VR::SynchronizeStage::VERY_LATE) || !runtime->got_first_sync) {
             //vr->update_hmd_state();
@@ -4761,6 +4782,7 @@ vr::EVRCompositorError D3D12Component::on_frame(VR* vr) {
         }*/
     }
 
+    on_frame_cp.mark("right_eye_submit");
     m_prev_backbuffer = backbuffer;
 
     return e;

@@ -1,4 +1,7 @@
 // This can be considered a binding of the C API.
+#include <algorithm>
+#include <chrono>
+#include <format>
 #include <iostream>
 #include <memory>
 
@@ -30,6 +33,22 @@ auto lua_input_source(const UEVR_VRData& vr, UEVR_InputSourceHandle (*get_source
         }
         return sol::make_object(state, source);
     });
+}
+}
+
+namespace {
+// Calls a Lua callback, timing it when the context's callback profiler is on.
+template <typename Fn, typename... Args>
+sol::protected_function_result profiled_call(ScriptContext* ctx, const char* event_name, Fn& fn, Args&&... args) {
+    if (!ctx->is_profiling_callbacks()) {
+        return fn(std::forward<Args>(args)...);
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    sol::protected_function_result result = fn(std::forward<Args>(args)...);
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    ctx->record_callback_timing(event_name, fn, ms);
+    return result;
 }
 }
 
@@ -116,6 +135,104 @@ void ScriptContext::log(const std::string& message) {
     OutputDebugStringA((msg + "\n").c_str());
     fprintf(stderr, "%s\n", msg.c_str());
     API::get()->log_info("%s", msg.c_str());
+}
+
+void ScriptContext::update_callback_profiler() {
+    bool enabled = false;
+
+    try {
+        sol::object flag = m_lua["UEVR_PROFILE_CALLBACKS"];
+        enabled = flag.is<bool>() && flag.as<bool>();
+    } catch (...) {
+        enabled = false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+
+    if (enabled != m_profile_callbacks) {
+        m_profile_callbacks = enabled;
+        m_callback_timings.clear();
+        m_profile_frames = 0;
+        m_profile_last_log = now;
+        log(std::string{"[Perf][lua callbacks] profiling "} + (enabled ? "on" : "off"));
+    }
+
+    if (!enabled) {
+        return;
+    }
+
+    ++m_profile_frames;
+
+    if (now - m_profile_last_log < std::chrono::seconds{5}) {
+        return;
+    }
+
+    std::vector<CallbackTiming*> rows{};
+
+    for (auto& [key, timing] : m_callback_timings) {
+        if (timing.count > 0) {
+            rows.push_back(&timing);
+        }
+    }
+
+    std::sort(rows.begin(), rows.end(), [](const CallbackTiming* a, const CallbackTiming* b) { return a->sum_ms > b->sum_ms; });
+
+    const auto frames = m_profile_frames > 0 ? (double)m_profile_frames : 1.0;
+    double total = 0.0;
+    std::string line{};
+
+    for (auto* row : rows) {
+        const auto per_frame = row->sum_ms / frames;
+        total += per_frame;
+        line += std::format(" {}={:.3f}/{:.2f}x{:.1f}", row->label, per_frame, row->max_ms, (double)row->count / frames);
+    }
+
+    log(std::format("[Perf][lua callbacks] frames={} sum={:.3f}ms/frame (label=avg ms per frame/max ms per call x calls per frame){}",
+        m_profile_frames, total, line));
+
+    for (auto& [key, timing] : m_callback_timings) {
+        timing.sum_ms = 0.0;
+        timing.max_ms = 0.0;
+        timing.count = 0;
+    }
+
+    m_profile_frames = 0;
+    m_profile_last_log = now;
+}
+
+void ScriptContext::record_callback_timing(const char* event_name, const sol::protected_function& fn, double ms) {
+    const auto key = std::make_pair(event_name, fn.pointer());
+    auto it = m_callback_timings.find(key);
+
+    if (it == m_callback_timings.end()) {
+        std::string label{event_name};
+
+        try {
+            auto L = m_lua.lua_state();
+            fn.push(L);
+            lua_Debug ar{};
+
+            // ">S" pops the function, so the stack (and any pending call results) stays balanced.
+            if (lua_getinfo(L, ">S", &ar) != 0) {
+                std::string src = ar.short_src;
+                const auto slash = src.find_last_of("/\\");
+
+                if (slash != std::string::npos) {
+                    src = src.substr(slash + 1);
+                }
+
+                label += std::format("@{}:{}", src, ar.linedefined);
+            }
+        } catch (...) {
+        }
+
+        it = m_callback_timings.emplace(key, CallbackTiming{label}).first;
+    }
+
+    auto& timing = it->second;
+    timing.sum_ms += ms;
+    timing.max_ms = (std::max)(timing.max_ms, ms);
+    ++timing.count;
 }
 
 void ScriptContext::setup_callback_bindings() {
@@ -1217,7 +1334,7 @@ bool ScriptContext::global_ufunction_pre_handler(uevr::API::UFunction* fn, uevr:
             auto fn_obj = sol::make_object(ctx->m_lua.lua_state(), fn);
 
             for (auto& cb : it->second->pre_hooks) try {
-                if (sol::object result = ctx->handle_protected_result(cb(fn_obj, obj_obj, locals_obj, out_result)); !result.is<sol::nil_t>() && result.is<bool>() && result.as<bool>() == false) {
+                if (sol::object result = ctx->handle_protected_result(profiled_call(&*ctx, "ufunction_pre_hook", cb, fn_obj, obj_obj, locals_obj, out_result)); !result.is<sol::nil_t>() && result.is<bool>() && result.as<bool>() == false) {
                     any_false = true;
                 }
             } catch (const std::exception& e) {
@@ -1246,7 +1363,7 @@ void ScriptContext::global_ufunction_post_handler(uevr::API::UFunction* fn, uevr
             auto fn_obj = sol::make_object(ctx->m_lua.lua_state(), fn);
 
             for (auto& cb : it->second->post_hooks) try {
-                ctx->handle_protected_result(cb(fn_obj, obj_obj, locals_obj, result));
+                ctx->handle_protected_result(profiled_call(&*ctx, "ufunction_post_hook", cb, fn_obj, obj_obj, locals_obj, result));
             } catch (const std::exception& e) {
                 ctx->log_error("Exception in global_ufunction_post_handler: " + std::string(e.what()));
             } catch (...) {
@@ -1261,7 +1378,7 @@ void ScriptContext::on_xinput_get_state(uint32_t* retval, uint32_t user_index, v
         std::scoped_lock _{ ctx->m_mtx };
 
         for (auto& fn : ctx->m_on_xinput_get_state_callbacks) try {
-            ctx->handle_protected_result(fn(retval, user_index, (XINPUT_STATE*)state));
+            ctx->handle_protected_result(profiled_call(&*ctx, "xinput_get_state", fn, retval, user_index, (XINPUT_STATE*)state));
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_xinput_get_state: " + std::string(e.what()));
         } catch (...) {
@@ -1275,7 +1392,7 @@ void ScriptContext::on_xinput_set_state(uint32_t* retval, uint32_t user_index, v
         std::scoped_lock _{ ctx->m_mtx };
 
         for (auto& fn : ctx->m_on_xinput_set_state_callbacks) try {
-            ctx->handle_protected_result(fn(retval, user_index, (XINPUT_VIBRATION*)vibration));
+            ctx->handle_protected_result(profiled_call(&*ctx, "xinput_set_state", fn, retval, user_index, (XINPUT_VIBRATION*)vibration));
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_xinput_set_state: " + std::string(e.what()));
         } catch (...) {
@@ -1288,10 +1405,12 @@ void ScriptContext::on_pre_engine_tick(UEVR_UGameEngineHandle engine, float delt
     g_contexts.for_each([=](auto ctx) {
         std::scoped_lock _{ ctx->m_mtx };
         
+        ctx->update_callback_profiler();
+
         auto engine_obj = sol::make_object(ctx->m_lua.lua_state(), (uevr::API::UObject*)engine);
 
         for (auto& fn : ctx->m_on_pre_engine_tick_callbacks) try {
-            ctx->handle_protected_result(fn(engine_obj, delta_seconds));
+            ctx->handle_protected_result(profiled_call(&*ctx, "pre_engine_tick", fn, engine_obj, delta_seconds));
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_pre_engine_tick: " + std::string(e.what()));
         } catch (...) {
@@ -1307,7 +1426,7 @@ void ScriptContext::on_post_engine_tick(UEVR_UGameEngineHandle engine, float del
         auto engine_obj = sol::make_object(ctx->m_lua.lua_state(), (uevr::API::UObject*)engine);
 
         for (auto& fn : ctx->m_on_post_engine_tick_callbacks) try {
-            ctx->handle_protected_result(fn(engine_obj, delta_seconds));
+            ctx->handle_protected_result(profiled_call(&*ctx, "post_engine_tick", fn, engine_obj, delta_seconds));
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_post_engine_tick: " + std::string(e.what()));
         } catch (...) {
@@ -1362,9 +1481,9 @@ void ScriptContext::on_early_calculate_stereo_view_offset(UEVR_StereoRenderingDe
 
         for (auto& fn : ctx->m_on_early_calculate_stereo_view_offset_callbacks) try {
             if (is_ue5) {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "early_stereo_view_offset", fn, device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
             } else {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "early_stereo_view_offset", fn, device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
             }
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_early_calculate_stereo_view_offset: " + std::string(e.what()));
@@ -1392,9 +1511,9 @@ void ScriptContext::on_pre_calculate_stereo_view_offset(UEVR_StereoRenderingDevi
 
         for (auto& fn : ctx->m_on_pre_calculate_stereo_view_offset_callbacks) try {
             if (is_ue5) {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "pre_stereo_view_offset", fn, device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
             } else {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "pre_stereo_view_offset", fn, device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
             }
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_pre_calculate_stereo_view_offset: " + std::string(e.what()));
@@ -1422,9 +1541,9 @@ void ScriptContext::on_post_calculate_stereo_view_offset(UEVR_StereoRenderingDev
 
         for (auto& fn : ctx->m_on_post_calculate_stereo_view_offset_callbacks) try {
             if (is_ue5) {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "post_stereo_view_offset", fn, device, view_index, world_to_meters, ue5_position, ue5_rotation, is_double));
             } else {
-                ctx->handle_protected_result(fn(device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
+                ctx->handle_protected_result(profiled_call(&*ctx, "post_stereo_view_offset", fn, device, view_index, world_to_meters, ue4_position, ue4_rotation, is_double));
             }
         } catch (const std::exception& e) {
             ctx->log_error("Exception in on_post_calculate_stereo_view_offset: " + std::string(e.what()));

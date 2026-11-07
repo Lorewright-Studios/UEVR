@@ -1,8 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <shared_mutex>
+#include <string>
+#include <utility>
 
 #include "ScriptPrerequisites.hpp"
 #include <uevr/API.hpp>
@@ -137,6 +141,13 @@ public:
         }
     }
 
+    // Optional per-callback timing for performance work. Off unless the Lua global
+    // UEVR_PROFILE_CALLBACKS is true; then "[LuaVR] [Perf][lua callbacks] ..." is logged every 5 seconds,
+    // one entry per registered callback, labelled <event>@<script>:<line>.
+    bool is_profiling_callbacks() const { return m_profile_callbacks; }
+    void update_callback_profiler();
+    void record_callback_timing(const char* event_name, const sol::protected_function& fn, double ms);
+
     struct ScriptErrorState {
         std::string e{};
         std::chrono::system_clock::time_point t{};
@@ -163,6 +174,19 @@ private:
     mutable std::shared_mutex m_script_error_mutex{};
 
     std::recursive_mutex m_mtx{};
+
+    struct CallbackTiming {
+        std::string label{};
+        double sum_ms{0.0};
+        double max_ms{0.0};
+        uint32_t count{0};
+    };
+
+    // Protected by m_mtx (every dispatch path holds it).
+    bool m_profile_callbacks{false};
+    uint64_t m_profile_frames{0};
+    std::chrono::steady_clock::time_point m_profile_last_log{};
+    std::map<std::pair<const char*, const void*>, CallbackTiming> m_callback_timings{};
     bool m_callbacks_retired{}; // Protected by m_mtx, including queued snapshot dispatch.
     UEVR_PluginInitializeParam* m_plugin_initialize_param{nullptr};
     std::vector<sol::protected_function> m_on_xinput_get_state_callbacks{};

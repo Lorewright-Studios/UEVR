@@ -93,6 +93,7 @@
 #include "Mods.hpp"
 #include "mods/UObjectHook.hpp"
 #include "mods/GameSpecific.hpp"
+#include "../../utility/PerfSections.hpp"
 #include "StellarBladeRendererEntry.hpp"
 #include "StellarBladeSlate.hpp"
 #include "HiFiRushRendererEntry.hpp"
@@ -15000,6 +15001,13 @@ void* FFakeStereoRenderingHook::engine_tick_hook(sdk::UGameEngine* engine, float
 
     hook->attempt_hooking();
 
+    // Hitch diagnostics: per-section game-thread timing (UEVR's own work vs the game's UGameEngine::Tick).
+    static utility::perf::Sections<8> s_tick_main{};
+    static utility::perf::Sections<32> s_tick_pre_mods{};
+    static utility::perf::Sections<32> s_tick_post_mods{};
+    const bool perf_enabled = VR::get()->is_hitch_diagnostics_enabled();
+    utility::perf::Checkpoints<8> perf_main{s_tick_main, perf_enabled};
+
     // Best place to run game thread jobs.
     GameThreadWorker::get().execute();
     if (sdk::galactic_racer::current_game()) { hook->service_swgr_bink_seek_budget(); }
@@ -15018,6 +15026,7 @@ void* FFakeStereoRenderingHook::engine_tick_hook(sdk::UGameEngine* engine, float
     
     g_framework->enable_engine_thread();
     g_framework->run_imgui_frame(false);
+    perf_main.mark("jobs+imgui");
 
     delta += hook->m_ignored_engine_delta;
     hook->m_ignored_engine_delta = 0.0f;
@@ -15025,11 +15034,19 @@ void* FFakeStereoRenderingHook::engine_tick_hook(sdk::UGameEngine* engine, float
     if (hook->m_tracking_system_hook != nullptr) {
         hook->m_tracking_system_hook->on_pre_engine_tick(engine, delta);
     }
+    perf_main.mark("tracking_pre");
 
     const auto& mods = g_framework->get_mods()->get_mods();
     for (auto& mod : mods) {
-        mod->on_pre_engine_tick(engine, delta);
+        if (perf_enabled) {
+            const auto t0 = utility::perf::Clock::now();
+            mod->on_pre_engine_tick(engine, delta);
+            s_tick_pre_mods.add(mod->get_name().data(), utility::perf::ms_between(t0, utility::perf::Clock::now()));
+        } else {
+            mod->on_pre_engine_tick(engine, delta);
+        }
     }
+    perf_main.mark("mods_pre");
 
     void* result = nullptr;
 
@@ -15069,12 +15086,31 @@ void* FFakeStereoRenderingHook::engine_tick_hook(sdk::UGameEngine* engine, float
         }
     }
 
+    perf_main.mark("game_engine_tick");
+
     for (auto& mod : mods) {
-        mod->on_post_engine_tick(engine, delta);
+        if (perf_enabled) {
+            const auto t0 = utility::perf::Clock::now();
+            mod->on_post_engine_tick(engine, delta);
+            s_tick_post_mods.add(mod->get_name().data(), utility::perf::ms_between(t0, utility::perf::Clock::now()));
+        } else {
+            mod->on_post_engine_tick(engine, delta);
+        }
     }
+    perf_main.mark("mods_post");
 
     if (hook->m_tracking_system_hook != nullptr) {
         hook->m_tracking_system_hook->on_post_engine_tick(engine, delta);
+    }
+    perf_main.mark("tracking_post");
+
+    if (perf_enabled) {
+        s_tick_main.count_frame();
+        s_tick_pre_mods.count_frame();
+        s_tick_post_mods.count_frame();
+        s_tick_main.log_if_due("game-thread");
+        s_tick_pre_mods.log_if_due("game-thread pre_engine_tick by mod");
+        s_tick_post_mods.log_if_due("game-thread post_engine_tick by mod");
     }
 
     return result;
@@ -30899,13 +30935,29 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
 
     const auto& mods = g_framework->get_mods()->get_mods();
 
+    // Hitch diagnostics: time each mod's stereo view callbacks (Lua scripts run inside LuaLoader's).
+    static utility::perf::Sections<32> s_stereo_mods{};
+    const bool stereo_perf_enabled = vr->is_hitch_diagnostics_enabled();
+
     if (!is_full_pass) {
         for (auto& mod : mods) {
-            mod->on_early_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            if (stereo_perf_enabled) {
+                const auto t0 = utility::perf::Clock::now();
+                mod->on_early_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+                s_stereo_mods.add(mod->get_name().data(), utility::perf::ms_between(t0, utility::perf::Clock::now()));
+            } else {
+                mod->on_early_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            }
         }
 
         for (auto& mod : mods) {
-            mod->on_pre_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            if (stereo_perf_enabled) {
+                const auto t0 = utility::perf::Clock::now();
+                mod->on_pre_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+                s_stereo_mods.add(mod->get_name().data(), utility::perf::ms_between(t0, utility::perf::Clock::now()));
+            } else {
+                mod->on_pre_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            }
         }
     }
 
@@ -31092,7 +31144,18 @@ __forceinline void FFakeStereoRenderingHook::calculate_stereo_view_offset(
 
     if (!is_full_pass) {
         for (auto& mod : mods) {
-            mod->on_post_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            if (stereo_perf_enabled) {
+                const auto t0 = utility::perf::Clock::now();
+                mod->on_post_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+                s_stereo_mods.add(mod->get_name().data(), utility::perf::ms_between(t0, utility::perf::Clock::now()));
+            } else {
+                mod->on_post_calculate_stereo_view_offset(stereo, view_index, view_rotation, world_to_meters, view_location, g_hook->m_has_double_precision);
+            }
+        }
+
+        if (stereo_perf_enabled && true_index == 1) {
+            s_stereo_mods.count_frame();
+            s_stereo_mods.log_if_due("stereo-view-offset callbacks by mod");
         }
 
         if (true_index == 0) {
