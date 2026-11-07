@@ -1,6 +1,7 @@
 #define NOMINMAX
 
 #include "vr/ControllerTouchBindings.hpp"
+#include "vr/MetaAsw.hpp"
 #include "vr/StockFrameBindingMigration.hpp"
 
 #include <fstream>
@@ -3191,6 +3192,17 @@ std::optional<std::string> VR::initialize_openxr() {
         spdlog::info("[VR] Found existing openxr instance");
     }
     
+    {
+        XrInstanceProperties instance_properties{XR_TYPE_INSTANCE_PROPERTIES};
+        if (xrGetInstanceProperties(m_openxr->instance, &instance_properties) == XR_SUCCESS) {
+            spdlog::info("[VR] OpenXR runtime: {} {}.{}.{}", instance_properties.runtimeName,
+                XR_VERSION_MAJOR(instance_properties.runtimeVersion),
+                XR_VERSION_MINOR(instance_properties.runtimeVersion),
+                XR_VERSION_PATCH(instance_properties.runtimeVersion));
+            uevr::meta_asw::Controller::get().set_runtime_name(instance_properties.runtimeName);
+        }
+    }
+
     // Step 2: Create a system
     spdlog::info("[VR] Creating OpenXR system");
 
@@ -3523,6 +3535,10 @@ bool VR::is_any_action_down() {
 
 bool VR::on_message(HWND wnd, UINT message, WPARAM w_param, LPARAM l_param) {
     ZoneScopedN(__FUNCTION__);
+
+    if (message == WM_DESTROY && g_framework != nullptr && wnd == g_framework->get_window()) {
+        uevr::meta_asw::Controller::get().on_window_destroyed();
+    }
 
     if (message == WM_DEVICECHANGE && !m_spoofed_gamepad_connection) {
         spdlog::info("[VR] Received WM_DEVICECHANGE");
@@ -8870,6 +8886,15 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
         m_disable_hdr_compositing->draw("Disable HDR Composition");
         m_disable_blur_widgets->draw("Disable Blur Widgets");
         m_uncap_framerate->draw("Uncap Framerate");
+        m_meta_asw_mode->draw("Meta ASW (frame pacing)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Meta PC runtime only (Quest over Link/Air Link, Rift). Smart forces ASW for a steady half rate\n"
+                "when the game can't hold the refresh rate, and sets it back to automatic when the game closes.\n"
+                "Other runtimes (SteamVR, Virtual Desktop) are never touched.");
+        }
+        if (uevr::meta_asw::Controller::get().is_meta_runtime()) {
+            ImGui::Text("Meta ASW: %s", uevr::meta_asw::Controller::get().state_name());
+        }
         m_enable_gui->draw("Enable GUI");
         m_enable_depth->draw("Enable Depth-based Latency Reduction");
         m_load_blueprint_code->draw("Load Blueprint Code");

@@ -718,6 +718,11 @@ public:
         return m_perf_cache_pre57_ui_probe->value();
     }
 
+    // 0 = Smart, 1 = Leave alone, 2 = Always force (see mods/vr/MetaAsw.hpp).
+    int32_t get_meta_asw_mode() const {
+        return m_meta_asw_mode->value();
+    }
+
     bool is_ahud_compatibility_enabled() const {
         if (uevr::nascar::is_target()) { return false; }
         return m_compatibility_ahud->value();
@@ -1382,6 +1387,12 @@ private:
         "Alternating/AFR",
     };
 
+    static const inline std::vector<std::string> s_meta_asw_mode_names{
+        "Smart (Meta runtime only)",
+        "Leave alone",
+        "Always force (Meta runtime only)",
+    };
+
     static const inline std::vector<std::string> s_sync_mode_names{
         "Early",
         "Late",
@@ -1474,6 +1485,7 @@ private:
     const ModCombo::Ptr m_vertical_projection_override{ModCombo::create(generate_name("VerticalProjectionOverride"), s_vertical_projection_override_names)};
     const ModToggle::Ptr m_grow_rectangle_for_projection_cropping{ModToggle::create(generate_name("GrowRectangleForProjectionCropping"), false)};
     const ModCombo::Ptr m_sync_mode{ ModCombo::create(generate_name("SynchronizationMode"), s_sync_mode_names, 2) };
+    const ModCombo::Ptr m_meta_asw_mode{ ModCombo::create(generate_name("MetaASWMode"), s_meta_asw_mode_names, 0) };
 
     // Snap turn settings and globals
     void gamepad_snapturn(XINPUT_STATE& state);
@@ -1815,6 +1827,7 @@ public:
             *m_enable_depth,
             *m_enable_hitch_diagnostics,
             *m_perf_cache_pre57_ui_probe,
+            *m_meta_asw_mode,
             *m_ktjl_openxr_factory_repair,
             *m_decoupled_pitch,
             *m_decoupled_pitch_ui_adjust,

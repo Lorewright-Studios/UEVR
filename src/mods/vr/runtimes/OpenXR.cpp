@@ -23,6 +23,7 @@
 #include "../../GameSpecific.hpp"
 #include "../../VR.hpp"
 #include "../../../utility/Logging.hpp"
+#include "../MetaAsw.hpp"
 #include "OpenXR.hpp"
 #include "../SteamFrameBindings.hpp"
 
@@ -1295,6 +1296,12 @@ VRRuntime::Error OpenXR::synchronize_frame(std::optional<uint32_t> frame_count, 
 
         this->frame_state = local_frame_state;
 
+        uevr::meta_asw::Controller::get().on_wait_frame(
+            local_frame_state.predictedDisplayTime,
+            local_frame_state.predictedDisplayPeriod,
+            this->session_state == XR_SESSION_STATE_FOCUSED,
+            static_cast<uevr::meta_asw::Mode>(VR::get()->get_meta_asw_mode()));
+
         // Initialize all the existing frame states if they aren't already so we don't get some random error when calling xrEndFrame
         for (auto& pipeline_state : this->pipeline_states) {
             if (pipeline_state.frame_state.predictedDisplayTime <= 0) {
@@ -1760,6 +1767,7 @@ VRRuntime::Error OpenXR::consume_events(std::function<void(void*)> callback) {
                 this->wants_reinitialize = true;
             } else if (ev->state == XR_SESSION_STATE_STOPPING) {
                 spdlog::info("VR: XR_SESSION_STATE_STOPPING");
+                uevr::meta_asw::Controller::get().on_session_stopping();
 
                 if (this->ready()) {
                     xrEndSession(this->session);
