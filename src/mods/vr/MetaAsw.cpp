@@ -77,7 +77,7 @@ CliResult run_cli(const char* command) {
         if (!out) {
             return CliResult::Failed;
         }
-        out << command << "\r\nexit\r\n";
+        out << command << "\nexit\n"; // text mode writes CRLF
     }
 
     std::wstring cmdline = L"\"" + *exe + L"\" -f \"" + script + L"\"";
